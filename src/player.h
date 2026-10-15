@@ -43,4 +43,7 @@ void pollMeta();
 String savedDir();
 void saveDir(const String& dir);
 
+uint8_t uiTheme();
+void saveUiTheme(uint8_t idx);
+
 }

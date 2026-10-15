@@ -20,7 +20,8 @@ timeout 240 python3 /tmp/opencode/sermon.py /dev/ttyACMn 235        # monitor se
 - NUNCA modificar `/home/roe/Músicas/` (nem copiar pra lá).
 - Logs: usar `CM_LOG` de `src/config.h` (nunca `Serial.printf` direto no loop — USB CDC sem leitor bloqueia o loop).
 - ESP32-audioI2S é **vendorizada** em `lib/` com 5 patches (overflow ID3, wrap bytesWasRead, deadlock do AudioBuffer nos skips ID3, guard SBR, guard FLAC — ver MEMORY.md §5). Nunca substituir por versão de registry (≥3.3 exige PSRAM; upstream quebra sem PSRAM).
-- FLAC não é suportado (impossível sem PSRAM nesta lib) — não reativar.
+- FLAC: tocado por caminho PRÓPRIO (`src/flac_player.*` + dr_flac + arena estática de 40KB) — o guard da lib fica desativado de propósito; não reativar o FLAC da lib (overflow sem PSRAM).
+- 3 temas de UI (Terminal/Now Playing/Tape Deck) selecionáveis com `V`, persistidos na NVS ("ui").
 - Chamadas de transporte da lib (`connecttoFS`/seek/pause) SÓ via queues da task de áudio (`src/player.cpp`).
 - API Arduino SD usa path relativo ao mount (`/arquivo.m4a`); POSIX/VFS usa `/sd/...` — strip feito no player.
 - Áudio sai pelo canal I2S próprio (`src/audio_out.*`) via hook `audio_process_i2s`; volume no ES8311 (reg 0x32), não em software.
@@ -34,4 +35,4 @@ timeout 240 python3 /tmp/opencode/sermon.py /dev/ttyACMn 235        # monitor se
 
 ## Fluxo de teste com o usuário
 
-Usuário tem o device USB conectado; ele testa fisicamente (teclas: `;`/`.` navega, espaço play, `/` próxima, `[`/`]` seek). Peça para ele tocar: (1) um .m4a, (2) o .mp3 Blind Guardian (regressão dos patches ID3), (3) pular faixas, pausar, seek. Confirmar posição avançando no `[HB]` do monitor.
+Usuário tem o device USB conectado; ele testa fisicamente (teclas: `;`/`.` navega, espaço play, `/` próxima, `[`/`]` seek, `v` cicla tema). Peça para ele tocar: (1) um .m4a, (2) o .mp3 Blind Guardian (regressão dos patches ID3), (3) o FLAC (regressão da arena), (4) pular faixas, pausar, seek, (5) ciclar os 3 temas com `v`. Confirmar posição avançando no `[HB]` do monitor.

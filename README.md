@@ -1,7 +1,8 @@
 # CardPlay
 
 Player de musica para o **M5Stack Cardputer ADV** (ESP32-S3FN8, sem PSRAM).
-UI "Now Playing" (mockup escolhido em `mockups/ui_b.png`).
+Tres UIs selecionaveis no aparelho (tecla `V`, fica salva): **Terminal** (A),
+**Now Playing** (B) e **Tape Deck** (C) — mockups em `mockups/`.
 
 ## Instalar via Launcher (bmorcelli/Launcher)
 
@@ -27,6 +28,7 @@ UI "Now Playing" (mockup escolhido em `mockups/ui_b.png`).
 | Tocando | `;` / `.` | volume + / - (0..21, OSD na tela) |
 | Tocando | `B` / `TAB` / `ENTER` | abre a lista |
 | Qualquer | `DEL` | abre a lista (se fechada) |
+| Qualquer | `V` | cicla a UI: Terminal / Now Playing / Tape Deck |
 
 Toca pastas inteiras em sequencia (ordem natural, 01 < 02 < 10), com auto-next no fim.
 Ultima pasta e volume ficam salvos na NVS.
@@ -44,10 +46,13 @@ Ultima pasta e volume ficam salvos na NVS.
 
 ## Formatos
 
-MP3, M4A/AAC-LC, FLAC, WAV, OGG/Opus (decoders do ESP32-audioI2S).
+MP3, M4A/AAC-LC, **FLAC** (decoder proprio `dr_flac` com arena estatica — ver abaixo),
+WAV, OGG/Opus (decoders do ESP32-audioI2S).
 > Obs.: sem PSRAM o lib e' pinado no tag **3.0.12** (unica linha com buffer de
-> decodificacao em SRAM interna; >=3.3.x exige PSRAM). FLAC e' best-effort:
-> o acervo tem 1 arquivo; lossy 320k e' o caso principal.
+> decodificacao em SRAM interna; >=3.3.x exige PSRAM) com patches locais em `lib/`.
+> FLAC usa caminho dedicado (`src/flac_player.*` + `src/dr_flac.h`) porque o
+> decoder da lib exige PSRAM; o dr_flac aloca numa arena estatica de 40KB, imune
+> a fragmentacao de heap, e sai no mesmo I2S proprio (bit-perfect igual).
 
 ## Build
 
@@ -67,10 +72,13 @@ M5Cardputer 1.2.0, ESP32-audioI2S 3.0.12. Board `m5stack-stamps3`.
 ## Estrutura
 
 ```
-src/config.h    pinos, paleta, constantes
-src/es8311.*    init e volume HW do codec
-src/player.*    fila, decode (task dedicada), metadados, volume/seek
-src/browser.*   navegacao de pastas no SD (ordem natural, UTF-8)
-src/ui.*        UI Now Playing + lista + OSD de volume (canvas 240x135)
-src/main.cpp    setup/loop, teclado, mount do SD
+src/config.h      pinos, constantes, paletas dos 3 temas
+src/es8311.*      init e volume HW do codec
+src/audio_out.*   canal I2S proprio (16-bit, sample rate nativa)
+src/player.*      fila, decode (task dedicada), metadados, volume/seek, NVS
+src/flac_player.* decoder FLAC proprio (dr_flac + arena estatica)
+src/dr_flac.h     dr_flac v0.13.4 vendorizado (single header)
+src/browser.*     navegacao de pastas no SD (ordem natural, UTF-8)
+src/ui.*          UIs Terminal/Now Playing/Tape Deck + lista + OSD (canvas 240x135)
+src/main.cpp      setup/loop, teclado, mount do SD
 ```

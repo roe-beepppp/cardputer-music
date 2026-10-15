@@ -2,6 +2,7 @@
 #include "config.h"
 #include "es8311.h"
 #include "audio_out.h"
+#include "flac_player.h"
 #include <Audio.h>
 #include <SD.h>
 #include <Preferences.h>
@@ -15,6 +16,7 @@ std::vector<String> s_list;
 PlayerState s_st;
 Preferences s_prefs;
 volatile bool s_eofPending = false;
+bool s_flacMode = false;  // true while playing via flac_player (audioI2S bypassed)
 
 portMUX_TYPE s_metaMux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool s_id3Pending = false;
@@ -133,32 +135,75 @@ void task(void*) {
                 CM_LOG("\n");
             }
             s_audio.stopSong();
+            flac_player::stop();
+            s_flacMode = false;
             audio_out::silence(0);  // replace stale ring data before switching
-            bool ok = s_audio.connecttoFS(SD, ap);
-            audio_out::silence(0);  // flush DMA ring with silence between tracks
-            if (ok) audio_out::setSampleRate(s_audio.getSampleRate());
-            const char* cn = s_audio.getCodecname();
-            CM_LOG("[PLAYER] connect=%d codec=%s rate=%u bit=%u dur=%u\n",
-                          (int)ok, cn ? cn : "?",
-                          (unsigned)s_audio.getSampleRate(),
-                          (unsigned)s_audio.getBitRate(),
-                          (unsigned)s_audio.getAudioFileDuration());
+            String low = sc.path;
+            low.toLowerCase();
+            if (low.endsWith(".flac")) {
+                bool ok = flac_player::start(ap);
+                s_flacMode = ok;
+                if (ok) {
+                    s_st.codec      = "FLAC";
+                    s_st.sampleRate = flac_player::sampleRate();
+                    s_st.duration   = flac_player::durationSec();
+                    s_st.bitrate    = flac_player::bitrate();
+                    s_st.position   = 0;
+                }
+                audio_out::silence(0);
+                CM_LOG("[PLAYER] flac start=%d rate=%u dur=%u br=%u\n",
+                              (int)ok, (unsigned)flac_player::sampleRate(),
+                              (unsigned)flac_player::durationSec(),
+                              (unsigned)flac_player::bitrate());
+            } else {
+                bool ok = s_audio.connecttoFS(SD, ap);
+                audio_out::silence(0);  // flush DMA ring with silence between tracks
+                if (ok) audio_out::setSampleRate(s_audio.getSampleRate());
+                const char* cn = s_audio.getCodecname();
+                CM_LOG("[PLAYER] connect=%d codec=%s rate=%u bit=%u dur=%u\n",
+                              (int)ok, cn ? cn : "?",
+                              (unsigned)s_audio.getSampleRate(),
+                              (unsigned)s_audio.getBitRate(),
+                              (unsigned)s_audio.getAudioFileDuration());
+            }
         }
         Cmd c;
         while (xQueueReceive(s_qEv, &c, 0) == pdPASS) {
             if (c.type == CMD_SEEK) {
-                CM_LOG("[PLAYER] seek %d (from %u)\n", (int)c.arg,
-                              (unsigned)s_audio.getAudioCurrentTime());
-                s_audio.setAudioPlayPosition((uint16_t)c.arg);
-                CM_LOG("[PLAYER] seek done, now=%u\n",
-                              (unsigned)s_audio.getAudioCurrentTime());
+                if (s_flacMode) {
+                    CM_LOG("[PLAYER] flac seek %d (from %u)\n", (int)c.arg,
+                                  (unsigned)flac_player::currentSec());
+                    flac_player::seekSec((uint32_t)c.arg);
+                    s_st.position = (uint32_t)c.arg;
+                } else {
+                    CM_LOG("[PLAYER] seek %d (from %u)\n", (int)c.arg,
+                                  (unsigned)s_audio.getAudioCurrentTime());
+                    s_audio.setAudioPlayPosition((uint16_t)c.arg);
+                    CM_LOG("[PLAYER] seek done, now=%u\n",
+                                  (unsigned)s_audio.getAudioCurrentTime());
+                }
             } else if (c.type == CMD_PAUSE) {
-                s_audio.pauseResume();
-                if (s_st.paused) audio_out::silence(0);  // fill ring so pause loops silence
-                CM_LOG("[PLAYER] pause -> %d\n", (int)s_st.paused);
+                if (s_flacMode) {
+                    flac_player::setPaused(s_st.paused);
+                    if (s_st.paused) audio_out::silence(0);
+                    CM_LOG("[PLAYER] flac pause -> %d\n", (int)s_st.paused);
+                } else {
+                    s_audio.pauseResume();
+                    if (s_st.paused) audio_out::silence(0);  // fill ring so pause loops silence
+                    CM_LOG("[PLAYER] pause -> %d\n", (int)s_st.paused);
+                }
             }
         }
-        s_audio.loop();
+        if (s_flacMode) {
+            if (!s_st.paused && !flac_player::decodeChunk()) {
+                flac_player::stop();
+                s_flacMode = false;
+                onEof();
+            }
+            if (s_flacMode) s_st.position = flac_player::currentSec();
+        } else {
+            s_audio.loop();
+        }
         vTaskDelay(1);
     }
 }
@@ -279,6 +324,7 @@ void pollMeta() {
         if (tr > 0) s_st.trackNo = tr;
     }
     if (!s_st.active) return;
+    if (s_flacMode) return;  // flac path updates position/duration itself
     s_st.position = s_audio.getAudioCurrentTime();
     if (s_st.duration == 0)   s_st.duration   = s_audio.getAudioFileDuration();
     if (s_st.codec.isEmpty()) {
@@ -292,5 +338,9 @@ void pollMeta() {
 String savedDir() { return s_prefs.getString("dir", "/sd"); }
 
 void saveDir(const String& dir) { s_prefs.putString("dir", dir); }
+
+uint8_t uiTheme() { return s_prefs.getUChar("ui", 1); }
+
+void saveUiTheme(uint8_t idx) { s_prefs.putUChar("ui", idx); }
 
 }

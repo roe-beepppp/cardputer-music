@@ -42,6 +42,7 @@ Player de música para **M5Stack Cardputer ADV**. Requisitos originais:
 | `config.h` | pinos, constantes, paleta UI B (rgb565), `CM_LOG` (log serial guardado por `Serial.availableForWrite()>160` — NUNCA bloqueia), `VOLUME_MAX 21` |
 | `es8311.h/.cpp` | init ES8311 (seq 0x00=0x80,01=0xB5,02=0x18,0D=01,12=00,13=10,32=BF,37=08 via `M5.In_I2C.writeRegister8(0x18,reg,val,400000)`, delay(2)); volume DAC |
 | `audio_out.h/.cpp` | canal I2S próprio (ver §3) |
+| `flac_player.h/.cpp` | caminho FLAC próprio: dr_flac (v0.13.4 vendorizado em `src/dr_flac.h`) + **arena estática de 40KB** (bump allocator com free-no-topo; reset em start/stop) — drflac_open determinístico mesmo com heap fragmentado (max block chegava a 7.6KB < 34KB do decoder) |
 | `player.h/.cpp` | estado, fila de faixas, task de áudio, hook `audio_process_i2s`, callbacks `audio_eof_mp3`/`audio_id3data`/`audio_info`, NVS `cardmusic` (vol/dir/track) |
 | `browser.h/.cpp` | listagem SD via POSIX opendir/readdir (paths estilo VFS `/sd/...`), dirs-first + natural sort, esconde não-áudio, 8 linhas |
 | `ui.h/.cpp` | UI B: M5Canvas 240x135 16bpp, Now Playing (título marquee, progresso, espectro, badge codec), browser overlay, OSD volume, tela de erro |
@@ -57,7 +58,7 @@ Player de música para **M5Stack Cardputer ADV**. Requisitos originais:
 2. **Audio.cpp ~140 (bytesWasRead)** — wrap `if(m_readPtr >= m_endPtr)` mapeava `readPtr == endPtr` para `buffer-1` (ponteiro inválido), então `readPtr == endPtr` nunca podia ocorrer. Fix: `>` em vez de `>=` (readPtr==endPtr = 1 byte restante, posição legal).
 3. **Audio.cpp states 2 (~1748), 5 (~1812) e 98 (~1942) de read_ID3_Header (skips)** — stall `audioHeader reading timeout` em MP3 com ID3 grande: no estado CHEIO do AudioBuffer (`readPtr == writePtr`), consumir `len` inteiro zerava `writeSpace()` para sempre. Fix: condição `> len` → `>= len` e `take = (len > 1) ? len - 1 : len` (sempre deixa 1 byte; wrapped landa em endPtr que é legal; CHEIO landa em writePtr-1). Comentários `// PATCH` no código.
 4. **aac_decoder/aac_decoder.h linhas 10-14 (guard SBR)** — `defined(BOARD_HAS_PSRAM)` é verdadeiro mesmo com `-DBOARD_HAS_PSRAM=0` → SBR (HE-AAC) compilado, buffers de 60KB → OOM (`can't allocate 50788 bytes`) em heap fragmentado. Fix: guard agora exige `&& BOARD_HAS_PSRAM`. Acervo é todo AAC-LC — sem perda.
-5. **FLAC**: guard `FLAC works only with PSRAM!` RESTAURADO de propósito. Motivo técnico: `m_frameSizeFLAC=16384` > buffer interno (16KB) + reserve 2048 → `getReadPtr()` faz memcpy de overlap até ~16KB em região de 2047 bytes → overflow de heap. **FLAC é impossível sem PSRAM nesta lib** (não é só o guard). O acervo tem 1 .flac — fica sem suporte (documentado).
+5. **FLAC**: o guard `FLAC works only with PSRAM!` da lib FICA (restaurado de propósito). Motivo técnico: `m_frameSizeFLAC=16384` > buffer interno (16KB) + reserve 2048 → `getReadPtr()` faz memcpy de overlap até ~16KB em região de 2047 bytes → overflow de heap. **FLAC é impossível sem PSRAM nesta lib** (não é só o guard). Solução: FLAC é tocado por **caminho próprio** (`src/flac_player.*` + dr_flac + arena), fora da lib.
 
 Anotados, NÃO corrigidos (não no acervo): WAV (`m_frameSizeWav=2048` → shadow de 2049 > 2047 = overflow de 2 bytes) e OPUS (`celt.cpp:2014` tem o mesmo `#ifdef BOARD_HAS_PSRAM`).
 
@@ -68,6 +69,8 @@ Anotados, NÃO corrigidos (não no acervo): WAV (`m_frameSizeWav=2048` → shado
 3. **Stall `audioHeader reading timeout`** no MP3: deadlock do AudioBuffer no estado CHEIO (§5.2 + §5.3).
 4. **OOM no M4A** após ciclos de faixas (`AACDecoder_AllocateBuffers OOM in SBR, can't allocate 50788 bytes`): SBR compilado por engano (§5.4).
 5. **Teclado "lento/rápido demais"**: repeat a 250Hz (keysState é level-triggered) + loop bloqueado por Serial USB CDC sem leitor. Fixes: edge-detection + repeat próprio; `CM_LOG` guardado. Usuário validou "teclado normal".
+6. **FLAC reabria falhando (`flac start=0`)** após ciclos MP3/M4A: heap fragmentado (maior bloco contíguo 7.6KB < ~34KB que o drflac_open aloca de uma vez) → resolvido com arena estática de 40KB no flac_player (validado em hardware: dec=1 sempre, arena=37840).
+7. **Seek de M4A** na lib 3.0.12 deixa o decoder AAC sujo (resync em loop; 3.4.7 adiciona `m_decoder->clear()`). Contornado: prev/restart = reconnect completo (`startTrack`); `[`/`]` seek instrumentado (se M4A falhar, desabilitar com toast).
 
 ## 7. Fluxo de build/flash/monitor (ambiente do usuário)
 
@@ -89,14 +92,12 @@ timeout 120 python3 /tmp/opencode/sermon.py /dev/ttyACM0 115
 
 ## 8. Estado atual (2026-10-15, fim da sessão)
 
-- **GitHub**: repo privado `roe-beepppp/cardputer-music`, branch `main`, tag **v0.1.0** (commit inicial do estado funcional). Convenção: commitar + taggear a cada alteração.
-- Firmware com TODOS os patches §5 buildado e **gravado no device** (última flash OK; RAM 12.3%, Flash 54.2%).
-- **prev() agora faz RESTART completo** (startTrack do mesmo índice) em vez de `setAudioPlayPosition(0)` — o seek-0 da lib deixa o decoder AAC sujo (resync flood; 3.4.7 resolve com `m_decoder->clear()`, inexistente na 3.0.12). CMD_SEEK ganhou logs de diagnóstico (getAudioCurrentTime antes/depois).
-- **PENDENTE: usuário testar no device**: MP3 e M4A tocando (ok no teste anterior), `,` (prev → restart limpo), `[`/`]` seek (M4A é o caso de risco — se der flood/resync, desabilitar seek p/ M4A com aviso).
-- FLAC: mostrará `FLAC works only with PSRAM!` e connect=0 (esperado/comportamento final).
-- Logs de debug ainda ATIVOS via CM_LOG: `[HB]` 1/s, `[KEY]`, `[PLAYER]`, `[DBG]`, `[AUDIO]`. Quando tudo estiver validado, silenciar/reduzir (CM_LOG_ENABLED 0) ou remover `[DBG]`.
-- Melhorias cosméticas pendentes: `active=1` mesmo com connect falho (idx continua da faixa velha no HB); badge `br=` mostra valor estranho (1411200 = PCM raw) em alguns momentos; tela de erro FLAC poderia dizer "não suportado".
-- README.md já existe (instruções Launcher, teclas, pinagem). Atualizar quando validar o MP3 (mencionar FLAC não suportado no ADV).
+- **GitHub**: repo privado `roe-beepppp/cardputer-music`, branch `main`, tags v0.1.0/v0.1.1. Convenção: cada alteração validada = commit + tag + push (ver AGENTS.md §Versionamento).
+- **v0.2.0** (no device e no GitHub): FLAC tocando e reabrindo sempre (arena estática validada em hardware: `[FLAC] dec=1 arena=37840`, mesmo com max block de 7.6KB); MP3/M4A intactos; **3 UIs selecionáveis** (Terminal/Now Playing/Tape Deck) com tecla `V`, toast e persistência NVS ("ui").
+- **PENDENTE: usuário validar visualmente os 3 temas** (tecla V) — a lógica foi buildada/gravada mas o visual ainda não foi confirmado pelo usuário. Se algo estiver estranho, ajustar ui.cpp e commitar v0.2.1.
+- `[`/`]` seek: só MP3 testado? NÃO — seek nem chegou a ser testado pelo usuário; M4A é o caso de risco (decoder sujo) — se der flood/resync, desabilitar seek p/ M4A com aviso.
+- Logs de debug ainda ATIVOS via CM_LOG (`[HB]` 1/s, `[KEY]`, `[PLAYER]`, `[DBG]`, `[FLAC]`, `[AUDIO]`). Silenciar (CM_LOG_ENABLED 0) quando tudo validado.
+- Cosmético pendente: campo codec= vazio no HB às vezes.
 
 ## 9. O que NUNCA fazer
 

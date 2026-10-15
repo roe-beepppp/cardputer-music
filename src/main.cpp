@@ -58,6 +58,16 @@ void keyChar(char c) {
         case 'B':
             browser::open(!b);
             break;
+        case 'v':
+        case 'V': {
+            uint8_t t = (uint8_t)((ui::theme() + 1) % 3);
+            ui::setTheme(t);
+            player::saveUiTheme(t);
+            char buf[32];
+            snprintf(buf, sizeof(buf), "UI: %s", ui::themeName(t));
+            ui::toastMsg(buf);
+            break;
+        }
         case ' ':
             if (b) browser::activate();
             else player::togglePause();
@@ -143,6 +153,7 @@ void setup() {
     player::begin();
     browser::begin();
     ui::init();
+    ui::setTheme(player::uiTheme());
     CM_LOG("[BOOT] ready\n");
 
     xTaskCreatePinnedToCore(player::task, "audio_pump", cfg::AUDIO_TASK_STACK,
