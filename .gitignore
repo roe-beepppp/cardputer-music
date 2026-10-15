@@ -1,0 +1,5 @@
+.pio/
+*.bin
+*.elf
+*.map
+*.d
