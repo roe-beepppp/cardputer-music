@@ -89,8 +89,10 @@ timeout 120 python3 /tmp/opencode/sermon.py /dev/ttyACM0 115
 
 ## 8. Estado atual (2026-10-15, fim da sessão)
 
+- **GitHub**: repo privado `roe-beepppp/cardputer-music`, branch `main`, tag **v0.1.0** (commit inicial do estado funcional). Convenção: commitar + taggear a cada alteração.
 - Firmware com TODOS os patches §5 buildado e **gravado no device** (última flash OK; RAM 12.3%, Flash 54.2%).
-- **PENDENTE: usuário testar o MP3 (Blind Guardian — que travava) e o M4A** (que dava OOM) após os patches §5.2-5.4. Monitor de 255s rodou SEM interação do usuário (idle). Esperado: ambos tocam.
+- **prev() agora faz RESTART completo** (startTrack do mesmo índice) em vez de `setAudioPlayPosition(0)` — o seek-0 da lib deixa o decoder AAC sujo (resync flood; 3.4.7 resolve com `m_decoder->clear()`, inexistente na 3.0.12). CMD_SEEK ganhou logs de diagnóstico (getAudioCurrentTime antes/depois).
+- **PENDENTE: usuário testar no device**: MP3 e M4A tocando (ok no teste anterior), `,` (prev → restart limpo), `[`/`]` seek (M4A é o caso de risco — se der flood/resync, desabilitar seek p/ M4A com aviso).
 - FLAC: mostrará `FLAC works only with PSRAM!` e connect=0 (esperado/comportamento final).
 - Logs de debug ainda ATIVOS via CM_LOG: `[HB]` 1/s, `[KEY]`, `[PLAYER]`, `[DBG]`, `[AUDIO]`. Quando tudo estiver validado, silenciar/reduzir (CM_LOG_ENABLED 0) ou remover `[DBG]`.
 - Melhorias cosméticas pendentes: `active=1` mesmo com connect falho (idx continua da faixa velha no HB); badge `br=` mostra valor estranho (1411200 = PCM raw) em alguns momentos; tela de erro FLAC poderia dizer "não suportado".

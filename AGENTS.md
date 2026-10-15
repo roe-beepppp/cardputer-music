@@ -25,6 +25,13 @@ timeout 240 python3 /tmp/opencode/sermon.py /dev/ttyACMn 235        # monitor se
 - API Arduino SD usa path relativo ao mount (`/arquivo.m4a`); POSIX/VFS usa `/sd/...` — strip feito no player.
 - Áudio sai pelo canal I2S próprio (`src/audio_out.*`) via hook `audio_process_i2s`; volume no ES8311 (reg 0x32), não em software.
 
+## Versionamento (pedido do usuário: "manter versões a cada alteração")
+
+- Repo privado: `https://github.com/roe-beepppp/cardputer-music` (branch `main`; credencial já salva em `~/.git-credentials`).
+- A cada alteração concluída e validada: `git add -A && git commit -m "vX.Y.Z: resumo" && git tag vX.Y.Z && git push origin main --tags`.
+- Semver simples: v0.1.0 = primeiro estado funcional (validado em hardware); incrementar minor por feature, patch por fix.
+- Manter MEMORY.md §8 atualizado no mesmo commit.
+
 ## Fluxo de teste com o usuário
 
 Usuário tem o device USB conectado; ele testa fisicamente (teclas: `;`/`.` navega, espaço play, `/` próxima, `[`/`]` seek). Peça para ele tocar: (1) um .m4a, (2) o .mp3 Blind Guardian (regressão dos patches ID3), (3) pular faixas, pausar, seek. Confirmar posição avançando no `[HB]` do monitor.
