@@ -33,6 +33,7 @@ bool mountSD() {
 void toggleRadio() {
     if (!player::radioMode()) {
         if (browser::state().open) browser::open(false);
+        browser::freeEntries();  // radio doesn't need the file list; free ~KB for WiFi/decoder
         ui::setLowMem(true);  // free canvas RAM BEFORE WiFi driver init (esp_wifi_init needs heap)
         if (!radio::enter()) {
             ui::setLowMem(false);
@@ -90,6 +91,10 @@ void keyChar(char c) {
             case 'B':
                 ui::staOpen(!so);
                 break;
+            case 'r':
+            case 'R':
+                toggleRadio();
+                return;
             case 'v':
             case 'V': {
                 uint8_t t = (uint8_t)((ui::theme() + 1) % 3);

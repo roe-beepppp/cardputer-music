@@ -22,6 +22,7 @@ void begin();
 const BrowserState& state();
 void refresh();
 void open(bool open);
+void freeEntries();
 void move(int d);
 void page(int d);
 void activate();

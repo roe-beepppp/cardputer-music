@@ -103,6 +103,12 @@ const BrowserState& state() { return s_bs; }
 
 void open(bool o) { s_bs.open = o; }
 
+void freeEntries() {
+    std::vector<BrowserEntry>().swap(s_bs.entries);
+    s_bs.sel = 0;
+    s_bs.top = 0;
+}
+
 void move(int d) {
     if (s_bs.entries.empty()) return;
     s_bs.sel += d;
