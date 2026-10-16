@@ -30,7 +30,7 @@ timeout 240 python3 /tmp/opencode/sermon.py /dev/ttyACMn 235        # monitor se
 
 ## Versionamento (pedido do usuário: "manter versões a cada alteração")
 
-- Repo privado: `https://github.com/roe-beepppp/cardputer-music` (branch `main`; credencial já salva em `~/.git-credentials`).
+- Repo público: `https://github.com/roe-beepppp/cardputer-music` (branch `main`; credencial já salva em `~/.git-credentials`). Releases carregam o `.bin` da versão (asset `cardputer-music-vX.Y.Z.bin`) para instalar pelo Launcher.
 - A cada alteração concluída e validada: `git add -A && git commit -m "vX.Y.Z: resumo" && git tag vX.Y.Z && git push origin main --tags`.
 - Semver simples: v0.1.0 = primeiro estado funcional (validado em hardware); incrementar minor por feature, patch por fix.
 - Manter MEMORY.md §8 atualizado no mesmo commit.
