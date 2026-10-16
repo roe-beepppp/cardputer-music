@@ -2,6 +2,7 @@
 #include "config.h"
 #include "player.h"
 #include "browser.h"
+#include "radio.h"
 #include <M5Unified.h>
 
 namespace {
@@ -41,6 +42,10 @@ int s_bat = -1;
 uint32_t s_batNext = 0;
 
 uint8_t s_reelStep = 0;
+
+bool s_staOpen = false;
+int s_staSel = 0;
+int s_staTop = 0;
 
 const int8_t s_cos12[12] = { 100, 87, 50, 0, -50, -87, -100, -87, -50, 0, 50, 87 };
 const int8_t s_sin12[12] = { 0, 50, 87, 100, 87, 50, 0, -50, -87, -100, -87, -50 };
@@ -445,6 +450,144 @@ void drawNowPlayingC() {
     else if (millis() < s_msgToastEnd) drawMsgToast();
 }
 
+void drawRadio() {
+    const PlayerState& st = player::state();
+    s_canvas.fillSprite(TH().bg);
+    drawHeader();
+
+    bool live = (millis() / 600) % 2;
+    s_canvas.setFont(&fonts::efontJA_10);
+    const char* badgeTxt = (s_themeIdx == 2) ? "ON AIR" : "LIVE";
+    int bw = (s_themeIdx == 2) ? 48 : 38;
+    int bx = (s_themeIdx == 2) ? 90 : 100;
+    if (live) {
+        s_canvas.fillRoundRect(bx, 2, bw, 11, 2, TH().primary);
+        s_canvas.setTextColor(TH().bg);
+    } else {
+        s_canvas.drawRoundRect(bx, 2, bw, 11, 2, TH().primary);
+        s_canvas.setTextColor(TH().primary);
+    }
+    s_canvas.setTextDatum(textdatum_t::middle_center);
+    s_canvas.drawString(badgeTxt, bx + bw / 2, 8);
+    s_canvas.setTextDatum(textdatum_t::top_left);
+
+    s_canvas.setFont(&fonts::efontJA_16);
+    String station = st.artist.length() ? st.artist : String("RADIO");
+    if (s_themeIdx == 0) station = "> " + station;
+    int scroll = marqueeScroll(station);
+    s_canvas.setTextColor(TH().text);
+    s_canvas.setClipRect(4, 28, 232, 22);
+    s_canvas.drawString(station.c_str(), 4 - scroll, 29);
+    s_canvas.clearClipRect();
+
+    s_canvas.setFont(&fonts::efontJA_10);
+    s_canvas.setTextColor(TH().accent);
+    String song = truncRight(st.title, 200);
+    s_canvas.drawString(song.c_str(), 4, 52);
+    if (st.count > 0) {
+        char idx[24];
+        snprintf(idx, sizeof(idx), "%d/%d", st.index + 1, st.count);
+        s_canvas.setTextDatum(textdatum_t::top_right);
+        s_canvas.setTextColor(TH().primary);
+        s_canvas.drawString(idx, 236, 52);
+        s_canvas.setTextDatum(textdatum_t::top_left);
+    }
+
+    char cur[12];
+    fmtTime(cur, sizeof(cur), st.position);
+    s_canvas.setTextColor(TH().dim);
+    s_canvas.drawString(cur, 8, 80);
+    s_canvas.setTextDatum(textdatum_t::top_right);
+    s_canvas.setTextColor(TH().primary);
+    s_canvas.drawString("AO VIVO", 232, 80);
+    s_canvas.setTextDatum(textdatum_t::top_left);
+
+    if (radio::status() != radio::CONNECTED) {
+        s_canvas.setTextColor(TH().primary);
+        s_canvas.setTextDatum(textdatum_t::middle_center);
+        s_canvas.drawString(radio::statusText(), 120, 96);
+        s_canvas.setTextDatum(textdatum_t::top_left);
+    } else if (st.title == "Conectando...") {
+        s_canvas.setTextColor(TH().dim);
+        s_canvas.setTextDatum(textdatum_t::middle_center);
+        s_canvas.drawString("buffering...", 120, 96);
+        s_canvas.setTextDatum(textdatum_t::top_left);
+    }
+
+    drawSpectrum(8, 120, 4, 4);
+
+    if (st.paused && st.active) {
+        s_canvas.setFont(&fonts::efontJA_16);
+        s_canvas.setTextDatum(textdatum_t::middle_center);
+        s_canvas.setTextColor(TH().primary);
+        s_canvas.drawString("PAUSA", 120, 101);
+        s_canvas.setTextDatum(textdatum_t::top_left);
+    }
+
+    char badge[56];
+    if (st.sampleRate) {
+        snprintf(badge, sizeof(badge), "%.1fkHz  %lukbps",
+                 st.sampleRate / 1000.0, (unsigned long)(st.bitrate / 1000));
+    } else {
+        snprintf(badge, sizeof(badge), "buffering...");
+    }
+    s_canvas.setFont(&fonts::efontJA_10);
+    s_canvas.setTextColor(TH().dim);
+    s_canvas.drawString(badge, 4, 124);
+    s_canvas.setTextDatum(textdatum_t::top_right);
+    s_canvas.drawString("R sai  B lista", 236, 124);
+    s_canvas.setTextDatum(textdatum_t::top_left);
+
+    if (millis() < s_volToastEnd) drawVolToast();
+    else if (millis() < s_msgToastEnd) drawMsgToast();
+}
+
+void drawStationList() {
+    s_canvas.fillSprite(TH().bg);
+    drawHeader();
+
+    s_canvas.setFont(&fonts::efontJA_10);
+    s_canvas.setTextColor(TH().accent);
+    char head[40];
+    snprintf(head, sizeof(head), "RADIO - %d estacoes", player::radioCount());
+    s_canvas.drawString(head, 4, 16);
+
+    const int rowH = 12;
+    const int listY = 28;
+    int n = player::radioCount();
+    int playing = player::radioIndex();
+    for (int r = 0; r < cfg::BROWSER_ROWS; r++) {
+        int i = s_staTop + r;
+        if (i >= n) break;
+        int y = listY + r * rowH;
+        bool sel = (i == s_staSel);
+        if (sel) s_canvas.fillRoundRect(2, y - 1, 236, rowH, 3, TH().sel);
+        const player::RadioStation* rs = player::radioStation(i);
+        if (!rs) continue;
+        s_canvas.setTextColor(sel ? TH().text : (i == playing ? TH().primary : TH().dim));
+        String label = String(i == playing ? "* " : "  ") + rs->name;
+        String vis = truncRight(label, 230);
+        s_canvas.drawString(vis.c_str(), 6, y + 1);
+    }
+
+    if (n > cfg::BROWSER_ROWS) {
+        int trackY = listY;
+        int trackH = cfg::BROWSER_ROWS * rowH;
+        s_canvas.fillRect(239, trackY, 1, trackH, TH().track);
+        int thumbH = trackH * cfg::BROWSER_ROWS / n;
+        if (thumbH < 6) thumbH = 6;
+        int denom = n - cfg::BROWSER_ROWS;
+        int thumbY = trackY + (denom > 0 ? (trackH - thumbH) * s_staTop / denom : 0);
+        s_canvas.fillRect(238, thumbY, 2, thumbH, TH().primary);
+    }
+
+    s_canvas.setTextColor(TH().dim);
+    s_canvas.drawString("ENTER toca   DEL fecha", 4, 124);
+
+    if (millis() < s_volToastEnd) drawVolToast();
+    else if (millis() < s_msgToastEnd) drawMsgToast();
+}
+
 void drawBrowser() {
     const BrowserState& bs = browser::state();
     s_canvas.fillSprite(TH().bg);
@@ -529,11 +672,59 @@ void toastMsg(const char* msg) {
     s_invalid = true;
 }
 
+void setLowMem(bool low) {
+    s_canvas.deleteSprite();
+    s_canvas.setColorDepth(low ? 8 : 16);
+    s_canvas.createSprite(240, 135);
+    s_canvas.setTextWrap(false);
+    s_invalid = true;
+}
+
+void staOpen(bool open) {
+    s_staOpen = open;
+    if (open) {
+        int n = player::radioCount();
+        s_staSel = player::radioIndex();
+        if (s_staSel < 0) s_staSel = 0;
+        if (n > 0 && s_staSel >= n) s_staSel = n - 1;
+        if (s_staSel < s_staTop) s_staTop = s_staSel;
+        if (s_staSel >= s_staTop + cfg::BROWSER_ROWS) s_staTop = s_staSel - cfg::BROWSER_ROWS + 1;
+        if (s_staTop < 0) s_staTop = 0;
+    }
+    s_invalid = true;
+}
+
+bool staIsOpen() { return s_staOpen; }
+
+int staSel() { return s_staSel; }
+
+void staMove(int d) {
+    int n = player::radioCount();
+    if (n == 0) return;
+    s_staSel += d;
+    if (s_staSel < 0) s_staSel = 0;
+    if (s_staSel >= n) s_staSel = n - 1;
+    if (s_staSel < s_staTop) s_staTop = s_staSel;
+    if (s_staSel >= s_staTop + cfg::BROWSER_ROWS) s_staTop = s_staSel - cfg::BROWSER_ROWS + 1;
+    s_invalid = true;
+}
+
+void staPage(int d) {
+    int n = player::radioCount();
+    if (n == 0) return;
+    s_staSel += d * cfg::BROWSER_ROWS;
+    if (s_staSel < 0) s_staSel = 0;
+    if (s_staSel >= n) s_staSel = n - 1;
+    if (s_staSel < s_staTop) s_staTop = s_staSel;
+    if (s_staSel >= s_staTop + cfg::BROWSER_ROWS) s_staTop = s_staSel - cfg::BROWSER_ROWS + 1;
+    s_invalid = true;
+}
+
 void tick() {
     uint32_t now = millis();
     const PlayerState& st = player::state();
     bool playing = st.active && st.playing && !st.paused;
-    bool brows = browser::state().open;
+    bool brows = browser::state().open || s_staOpen;
     uint32_t interval = brows ? 150 : (playing ? 100 : 400);
     if (!s_invalid && now - s_lastDraw < interval) return;
     s_lastDraw = now;
@@ -565,7 +756,10 @@ void tick() {
         }
     }
 
-    if (brows) drawBrowser();
+    if (player::radioMode()) {
+        if (s_staOpen) drawStationList();
+        else drawRadio();
+    } else if (brows) drawBrowser();
     else if (s_themeIdx == 0) drawNowPlayingA();
     else if (s_themeIdx == 1) drawNowPlayingB();
     else drawNowPlayingC();

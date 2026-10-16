@@ -7,7 +7,9 @@
 #include "es8311.h"
 #include "player.h"
 #include "browser.h"
+#include "radio.h"
 #include "ui.h"
+#include <vector>
 
 namespace {
 
@@ -28,8 +30,85 @@ bool mountSD() {
     return false;
 }
 
+void toggleRadio() {
+    if (!player::radioMode()) {
+        if (browser::state().open) browser::open(false);
+        ui::setLowMem(true);  // free canvas RAM BEFORE WiFi driver init (esp_wifi_init needs heap)
+        if (!radio::enter()) {
+            ui::setLowMem(false);
+            ui::toastMsg("wifi.txt?");
+            radio::leave();
+            ui::invalidate();
+            return;
+        }
+        std::vector<player::RadioStation> v;
+        if (!radio::loadStations(v) || v.empty()) {
+            ui::setLowMem(false);
+            ui::toastMsg("sem estacoes (radio.txt)");
+            radio::leave();
+            ui::invalidate();
+            return;
+        }
+        player::setRadioStations(v);
+        player::enterRadio();
+        int idx = player::radioLastIndex();
+        if (idx < 0 || idx >= (int)v.size()) idx = 0;
+        player::radioPlay(idx);
+        ui::toastMsg("RADIO ON");
+    } else {
+        ui::staOpen(false);
+        player::exitRadio();
+        radio::leave();
+        ui::setLowMem(false);
+        ui::toastMsg("RADIO OFF");
+    }
+    ui::invalidate();
+}
+
 void keyChar(char c) {
     CM_LOG("[KEY] '%c'\n", c);
+    if (player::radioMode()) {
+        bool so = ui::staIsOpen();
+        switch (c) {
+            case ';':
+                player::volumeDelta(+1);
+                ui::toastVolume(player::state().volume);
+                break;
+            case '.':
+                player::volumeDelta(-1);
+                ui::toastVolume(player::state().volume);
+                break;
+            case ',':
+                if (so) ui::staMove(-1);
+                else player::radioPrev();
+                break;
+            case '/':
+                if (so) ui::staMove(+1);
+                else player::radioNext();
+                break;
+            case 'b':
+            case 'B':
+                ui::staOpen(!so);
+                break;
+            case 'v':
+            case 'V': {
+                uint8_t t = (uint8_t)((ui::theme() + 1) % 3);
+                ui::setTheme(t);
+                player::saveUiTheme(t);
+                char buf[32];
+                snprintf(buf, sizeof(buf), "UI: %s", ui::themeName(t));
+                ui::toastMsg(buf);
+                break;
+            }
+            case ' ':
+                player::togglePause();
+                break;
+            default:
+                break;
+        }
+        ui::invalidate();
+        return;
+    }
     bool b = browser::state().open;
     switch (c) {
         case ';':
@@ -71,6 +150,10 @@ void keyChar(char c) {
         case ' ':
             if (b) browser::activate();
             else player::togglePause();
+            break;
+        case 'r':
+        case 'R':
+            toggleRadio();
             break;
         default:
             break;
@@ -186,28 +269,46 @@ void loop() {
 
     if (ks.enter && !prevEnter) {
         CM_LOG("[KEY] ENTER\n");
-        if (browser::state().open) browser::activate();
-        else browser::open(true);
+        if (player::radioMode()) {
+            if (ui::staIsOpen()) {
+                player::radioPlay(ui::staSel());
+                ui::staOpen(false);
+            } else {
+                ui::staOpen(true);
+            }
+        } else if (browser::state().open) {
+            browser::activate();
+        } else {
+            browser::open(true);
+        }
         ui::invalidate();
     }
     if (back && !prevBack) {
         CM_LOG("[KEY] BACKSPACE\n");
-        if (browser::state().open) browser::upDir();
-        else browser::open(true);
+        if (player::radioMode()) {
+            if (ui::staIsOpen()) ui::staOpen(false);
+            else toggleRadio();
+        } else if (browser::state().open) {
+            browser::upDir();
+        } else {
+            browser::open(true);
+        }
         ui::invalidate();
     }
     if (ks.tab && !prevTab) {
         CM_LOG("[KEY] TAB\n");
-        browser::open(!browser::state().open);
+        if (player::radioMode()) ui::staOpen(!ui::staIsOpen());
+        else browser::open(!browser::state().open);
         ui::invalidate();
     }
     prevEnter = ks.enter;
     prevBack = back;
     prevTab = ks.tab;
 
+    radio::tick();
     player::pollMeta();
     if (player::consumeEof()) {
-        player::next();
+        if (!player::radioMode()) player::next();
         ui::invalidate();
     }
 
@@ -215,11 +316,11 @@ void loop() {
     if (millis() - lastHb >= 1000) {
         lastHb = millis();
         const auto& ps = player::state();
-        CM_LOG("[HB] act=%d idx=%d/%d pos=%u/%u codec=%s rate=%u br=%u vol=%u pause=%d brw=%d\n",
+        CM_LOG("[HB] act=%d idx=%d/%d pos=%u/%u codec=%s rate=%u br=%u vol=%u pause=%d brw=%d rad=%d wifi=%d\n",
                       (int)ps.active, ps.index + 1, ps.count, (unsigned)ps.position,
                       (unsigned)ps.duration, ps.codec.c_str(), (unsigned)ps.sampleRate,
                       (unsigned)ps.bitrate, (unsigned)ps.volume, (int)ps.paused,
-                      (int)browser::state().open);
+                      (int)browser::state().open, (int)player::radioMode(), (int)radio::status());
     }
 
     ui::tick();

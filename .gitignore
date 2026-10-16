@@ -3,3 +3,7 @@
 *.elf
 *.map
 *.d
+sdkconfig.defaults
+sdkconfig.cardputer-adv
+managed_components/
+.dummy/

@@ -5,6 +5,7 @@
 #include "flac_player.h"
 #include <Audio.h>
 #include <SD.h>
+#include <WiFi.h>
 #include <Preferences.h>
 #include <string.h>
 #include <stdlib.h>
@@ -17,6 +18,12 @@ PlayerState s_st;
 Preferences s_prefs;
 volatile bool s_eofPending = false;
 bool s_flacMode = false;  // true while playing via flac_player (audioI2S bypassed)
+bool s_radioMode = false; // web radio (stream decoded by lib, output on our I2S)
+std::vector<player::RadioStation> s_sta;
+int s_staIdx = -1;
+int s_radioRetry = 0;
+char s_radioUrl[224] = {0};
+volatile bool s_streamEof = false;
 
 portMUX_TYPE s_metaMux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool s_id3Pending = false;
@@ -24,6 +31,9 @@ char s_id3Title[96]  = {0};
 char s_id3Artist[96] = {0};
 char s_id3Album[64]  = {0};
 int  s_id3Track = 0;
+volatile bool s_radioMetaPending = false;
+char s_radioTitle[96]   = {0};
+char s_radioStation[64] = {0};
 
 enum : uint8_t { CMD_SEEK, CMD_PAUSE };
 struct Cmd {
@@ -35,6 +45,7 @@ struct StartCmd {
 };
 QueueHandle_t s_qStart = nullptr;  // length 1, overwrite (always latest)
 QueueHandle_t s_qEv    = nullptr;  // seek/pause events
+QueueHandle_t s_qRadio = nullptr;  // length 1, overwrite (radio url; empty = stop)
 
 String baseName(const String& path) {
     int i = path.lastIndexOf('/');
@@ -105,21 +116,70 @@ void audio_info(const char* info) {
     if (info && info[0]) CM_LOG("[AUDIO] %s\n", info);
 }
 
+void audio_showstation(const char* info) {
+    if (info && info[0]) player::onStation(info);
+}
+
+void audio_showstreamtitle(const char* info) {
+    if (info && info[0]) player::onStreamTitle(info);
+}
+
+void audio_eof_stream(const char*) { player::onStreamEof(); }
+
 namespace player {
 
 void begin() {
     s_prefs.begin("cardmusic", false);
     s_qStart = xQueueCreate(1, sizeof(StartCmd));
     s_qEv    = xQueueCreate(4, sizeof(Cmd));
+    s_qRadio = xQueueCreate(1, sizeof(StartCmd));
     s_st.volume = s_prefs.getUChar("vol", 15);
     if (s_st.volume > cfg::VOLUME_MAX) s_st.volume = cfg::VOLUME_MAX;
     audio_out::begin();  // own I2S channel; lib's channel never receives data
     s_audio.setVolume(s_audio.maxVolume());
+    s_audio.setConnectionTimeout(6000, 10000);
     es8311_set_volume(s_st.volume);
 }
 
 void task(void*) {
     for (;;) {
+        StartCmd rc;
+        if (xQueueReceive(s_qRadio, &rc, 0) == pdPASS) {
+            CM_LOG("[RADIO] start: %s\n", rc.path);
+            s_audio.stopSong();
+            flac_player::stop();
+            s_flacMode = false;
+            audio_out::silence(0);
+            if (rc.path[0] == 0) {
+                s_radioMode = false;
+                s_st.active = false; s_st.playing = false; s_st.paused = false;
+            } else {
+                s_radioMode = true;
+                strlcpy(s_radioUrl, rc.path, sizeof(s_radioUrl));
+                for (int i = 0; i < 100 && WiFi.status() != WL_CONNECTED; i++) {
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                }
+                bool ok = s_audio.connecttohost(rc.path);
+                audio_out::silence(0);
+                if (ok) {
+                    s_radioRetry = 0;
+                    audio_out::setSampleRate(s_audio.getSampleRate());
+                    if (s_st.title == "Conectando...") s_st.title = "Ao vivo";
+                } else {
+                    s_radioRetry++;
+                    if (s_radioRetry <= 3) {
+                        StartCmd again;
+                        strlcpy(again.path, rc.path, sizeof(again.path));
+                        xQueueOverwrite(s_qRadio, &again);
+                    } else {
+                        s_radioRetry = 0;
+                        radioNext();
+                    }
+                }
+                CM_LOG("[RADIO] connect=%d retry=%d url=%s\n",
+                              (int)ok, s_radioRetry, rc.path);
+            }
+        }
         StartCmd sc;
         if (xQueueReceive(s_qStart, &sc, 0) == pdPASS) {
             CM_LOG("[PLAYER] start: %s\n", sc.path);
@@ -137,6 +197,7 @@ void task(void*) {
             s_audio.stopSong();
             flac_player::stop();
             s_flacMode = false;
+            s_radioMode = false;  // music start leaves radio mode
             audio_out::silence(0);  // replace stale ring data before switching
             String low = sc.path;
             low.toLowerCase();
@@ -170,7 +231,9 @@ void task(void*) {
         Cmd c;
         while (xQueueReceive(s_qEv, &c, 0) == pdPASS) {
             if (c.type == CMD_SEEK) {
-                if (s_flacMode) {
+                if (s_radioMode) {
+                    // live stream: no seek
+                } else if (s_flacMode) {
                     CM_LOG("[PLAYER] flac seek %d (from %u)\n", (int)c.arg,
                                   (unsigned)flac_player::currentSec());
                     flac_player::seekSec((uint32_t)c.arg);
@@ -183,7 +246,17 @@ void task(void*) {
                                   (unsigned)s_audio.getAudioCurrentTime());
                 }
             } else if (c.type == CMD_PAUSE) {
-                if (s_flacMode) {
+                if (s_radioMode) {
+                    if (s_st.paused) {
+                        s_audio.stopSong();
+                        audio_out::silence(0);
+                    } else {
+                        StartCmd again;
+                        strlcpy(again.path, s_radioUrl, sizeof(again.path));
+                        xQueueOverwrite(s_qRadio, &again);
+                    }
+                    CM_LOG("[PLAYER] radio pause -> %d\n", (int)s_st.paused);
+                } else if (s_flacMode) {
                     flac_player::setPaused(s_st.paused);
                     if (s_st.paused) audio_out::silence(0);
                     CM_LOG("[PLAYER] flac pause -> %d\n", (int)s_st.paused);
@@ -193,6 +266,19 @@ void task(void*) {
                     CM_LOG("[PLAYER] pause -> %d\n", (int)s_st.paused);
                 }
             }
+        }
+        if (s_radioMode && s_streamEof) {
+            s_streamEof = false;
+            s_radioRetry++;
+            if (s_radioRetry <= 3) {
+                StartCmd again;
+                strlcpy(again.path, s_radioUrl, sizeof(again.path));
+                xQueueOverwrite(s_qRadio, &again);
+            } else {
+                s_radioRetry = 0;
+                radioNext();
+            }
+            CM_LOG("[RADIO] eof retry=%d\n", s_radioRetry);
         }
         if (s_flacMode) {
             if (!s_st.paused && !flac_player::decodeChunk()) {
@@ -253,6 +339,7 @@ void togglePause() {
 }
 
 void seekDelta(int32_t sec) {
+    if (s_radioMode) return;  // live stream
     if (!s_st.active || s_st.duration == 0) return;
     int32_t p = (int32_t)s_st.position + sec;
     if (p < 0) p = 0;
@@ -324,6 +411,26 @@ void pollMeta() {
         if (tr > 0) s_st.trackNo = tr;
     }
     if (!s_st.active) return;
+    if (s_radioMode) {
+        if (s_radioMetaPending) {
+            char t[96], n[64];
+            portENTER_CRITICAL(&s_metaMux);
+            strlcpy(t, s_radioTitle, sizeof(t));
+            strlcpy(n, s_radioStation, sizeof(n));
+            s_radioMetaPending = false;
+            portEXIT_CRITICAL(&s_metaMux);
+            if (t[0]) s_st.title = t;
+            if (n[0]) s_st.artist = n;
+        }
+        s_st.position = s_audio.getAudioCurrentTime();
+        if (s_st.sampleRate == 0) s_st.sampleRate = s_audio.getSampleRate();
+        if (s_st.bitrate == 0)    s_st.bitrate    = s_audio.getBitRate();
+        if (s_st.codec.isEmpty()) {
+            const char* c = s_audio.getCodecname();
+            if (c && c[0]) s_st.codec = c;
+        }
+        return;
+    }
     if (s_flacMode) return;  // flac path updates position/duration itself
     s_st.position = s_audio.getAudioCurrentTime();
     if (s_st.duration == 0)   s_st.duration   = s_audio.getAudioFileDuration();
@@ -342,5 +449,77 @@ void saveDir(const String& dir) { s_prefs.putString("dir", dir); }
 uint8_t uiTheme() { return s_prefs.getUChar("ui", 1); }
 
 void saveUiTheme(uint8_t idx) { s_prefs.putUChar("ui", idx); }
+
+void setRadioStations(const std::vector<RadioStation>& v) {
+    s_sta = v;
+    s_staIdx = -1;
+}
+
+int radioCount() { return (int)s_sta.size(); }
+
+const RadioStation* radioStation(int i) {
+    if (i < 0 || i >= (int)s_sta.size()) return nullptr;
+    return &s_sta[i];
+}
+
+int radioIndex() { return s_staIdx; }
+
+void radioPlay(int idx) {
+    if (idx < 0 || idx >= (int)s_sta.size()) return;
+    s_staIdx = idx;
+    s_radioRetry = 0;
+    s_st.active = true; s_st.playing = true; s_st.paused = false;
+    s_st.path   = s_sta[idx].url;
+    s_st.title  = "Conectando...";
+    s_st.artist = s_sta[idx].name;
+    s_st.album  = ""; s_st.trackNo = 0;
+    s_st.codec  = "RADIO"; s_st.sampleRate = 0; s_st.bitrate = 0;
+    s_st.duration = 0; s_st.position = 0;
+    s_st.index = idx; s_st.count = (int)s_sta.size();
+    StartCmd c;
+    strlcpy(c.path, s_sta[idx].url.c_str(), sizeof(c.path));
+    if (s_qRadio) xQueueOverwrite(s_qRadio, &c);
+    s_prefs.putInt("rsta", idx);
+}
+
+void radioNext() {
+    if (s_sta.empty()) return;
+    radioPlay((s_staIdx + 1) % (int)s_sta.size());
+}
+
+void radioPrev() {
+    if (s_sta.empty()) return;
+    radioPlay((s_staIdx - 1 + (int)s_sta.size()) % (int)s_sta.size());
+}
+
+bool radioMode() { return s_radioMode; }
+
+void enterRadio() { s_radioMode = true; }
+
+void exitRadio() {
+    s_radioMode = false;
+    s_st.active = false; s_st.playing = false; s_st.paused = false;
+    StartCmd c;
+    c.path[0] = 0;
+    if (s_qRadio) xQueueOverwrite(s_qRadio, &c);
+}
+
+int radioLastIndex() { return s_prefs.getInt("rsta", 0); }
+
+void onStreamTitle(const char* info) {
+    portENTER_CRITICAL(&s_metaMux);
+    strlcpy(s_radioTitle, info, sizeof(s_radioTitle));
+    s_radioMetaPending = true;
+    portEXIT_CRITICAL(&s_metaMux);
+}
+
+void onStation(const char* info) {
+    portENTER_CRITICAL(&s_metaMux);
+    strlcpy(s_radioStation, info, sizeof(s_radioStation));
+    s_radioMetaPending = true;
+    portEXIT_CRITICAL(&s_metaMux);
+}
+
+void onStreamEof() { s_streamEof = true; }
 
 }

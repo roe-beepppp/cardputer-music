@@ -90,14 +90,15 @@ timeout 120 python3 /tmp/opencode/sermon.py /dev/ttyACM0 115
 - MAC do device: 28:84:85:75:e0:d8.
 - Instalação final pelo usuário: copiar `firmware.bin` para o SD e instalar pelo Launcher (SD > arquivo > Install), ou via WebUI bmorcelli.github.io/Launcher.
 
-## 8. Estado atual (2026-10-15, fim da sessão)
+## 8. Estado atual (2026-10-15)
 
-- **GitHub**: repo privado `roe-beepppp/cardputer-music`, branch `main`, tags v0.1.0/v0.1.1. Convenção: cada alteração validada = commit + tag + push (ver AGENTS.md §Versionamento).
-- **v0.2.0** (no device e no GitHub): FLAC tocando e reabrindo sempre (arena estática validada em hardware: `[FLAC] dec=1 arena=37840`, mesmo com max block de 7.6KB); MP3/M4A intactos; **3 UIs selecionáveis** (Terminal/Now Playing/Tape Deck) com tecla `V`, toast e persistência NVS ("ui").
-- **PENDENTE: usuário validar visualmente os 3 temas** (tecla V) — a lógica foi buildada/gravada mas o visual ainda não foi confirmado pelo usuário. Se algo estiver estranho, ajustar ui.cpp e commitar v0.2.1.
-- `[`/`]` seek: só MP3 testado? NÃO — seek nem chegou a ser testado pelo usuário; M4A é o caso de risco (decoder sujo) — se der flood/resync, desabilitar seek p/ M4A com aviso.
-- Logs de debug ainda ATIVOS via CM_LOG (`[HB]` 1/s, `[KEY]`, `[PLAYER]`, `[DBG]`, `[FLAC]`, `[AUDIO]`). Silenciar (CM_LOG_ENABLED 0) quando tudo validado.
-- Cosmético pendente: campo codec= vazio no HB às vezes.
+- **GitHub**: repo privado `roe-beepppp/cardputer-music`, branch `main`; tags v0.1.0/v0.1.1/v0.2.0/v0.3.0 + releases com `.bin` anexado (`dist/cardputer-music-vX.Y.Z.bin`) para instalar pelo Launcher e poder voltar versão. Convenção: cada alteração validada = commit + tag + push.
+- **v0.3.0 — WEB RADIO**: tecla `R` alterna modo rádio. WiFi STA lê `/sd/wifi.txt` (SSID linha 1, senha linha 2); estações de `/sd/radio.txt` (parser tolerante: Nome|URL, vírgula, URL sozinha, #, M3U — 20 estações do usuário parseadas OK). Streaming via `connecttohost` (http/https) usa o MESMO I2S próprio + volume ES8311; ICY mostra nome da estação + música atual; retry 3x na mesma URL e depois próxima; teclas: `,`/`/` troca estação, `B` lista (ENTER toca), `;`/`.` volume, `SPACE` pausa, `BACKSPACE`/`R` sai. Canvas vira 8bpp no modo rádio (`ui::setLowMem`) p/ o WiFi caber no heap; WiFi OFF ao sair (libera heap p/ música/FLAC).
+- **FIX do WiFi `ESP_ERR_NO_MEM` aplicado e BUILDADO (não gravado no device — estava desconectado na hora)**: no `toggleRadio` (src/main.cpp) o `ui::setLowMem(true)` agora roda ANTES de `radio::enter()` (esp_wifi_init precisa de heap contíguo; antes rodava com canvas 16bpp → ~14KB livres → NO_MEM). Log `[RADIO] wifi init heap=%u max=%u` adicionado em radio.cpp.
+- **PENDENTE: testar rádio no hardware.** Usuário precisa conferir `/sd/wifi.txt` — o SSID lido foi 'ROE:01020304' com **senha vazia (passlen=0)** (linha 2 ausente/vazia; conferir rede 2.4GHz). Se WiFi conectar: testar estações (`','`/`'/'`, lista `B`+ENTER), volume, pausa, sair. Se NO_MEM persistir: plano B = canvas 4bpp / liberar mais heap.
+- **v0.2.0 validado em hardware**: FLAC toca e reabre sempre (arena estática 40KB); MP3/M4A intactos. 3 UIs (tecla `V`: Terminal → Now Playing → Tape Deck, persiste na NVS "ui").
+- `[`/`]` seek ainda NÃO testado pelo usuário (M4A é o caso de risco — decoder AAC sujo; se der flood, desabilitar seek p/ M4A).
+- Logs de debug ATIVOS via CM_LOG (`[HB]`, `[KEY]`, `[PLAYER]`, `[FLAC]`, `[RADIO]`, `[AUDIO]`). Silenciar (CM_LOG_ENABLED 0) quando tudo validado.
 
 ## 9. O que NUNCA fazer
 

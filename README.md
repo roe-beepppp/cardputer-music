@@ -1,13 +1,15 @@
 # CardPlay
 
-Player de musica para o **M5Stack Cardputer ADV** (ESP32-S3FN8, sem PSRAM).
+Player de musica + web radio para o **M5Stack Cardputer ADV** (ESP32-S3FN8, sem PSRAM).
 Tres UIs selecionaveis no aparelho (tecla `V`, fica salva): **Terminal** (A),
-**Now Playing** (B) e **Tape Deck** (C) — mockups em `mockups/`.
+**Now Playing** (B) e **Tape Deck** (C) — mockups em `mockups/`. Modo **Radio** (tecla `R`).
 
 ## Instalar via Launcher (bmorcelli/Launcher)
 
 1. Todo o acervo de musicas vai para o cartao SD (FAT32, MBR/SDHC), na raiz ou em pastas.
-2. Copie `.pio/build/cardputer-adv/firmware.bin` para o cartao SD (sugestao: `CardPlay.bin`).
+2. Copie `firmware.bin` (build local em `.pio/build/cardputer-adv/`, ou baixe o
+   `.bin` da versao desejada em `dist/` / nos Releases do GitHub) para o cartao SD
+   (sugestao: `CardPlay.bin`).
 3. No Cardputer com o Launcher: **SD > CardPlay.bin > Install**. O Launcher cria a
    particao de app adequada e o app aparece no bootscreen/menu.
 4. Tecla do Launcher que voce usa para abrir fica a seu criterio; o app nao precisa
@@ -29,9 +31,24 @@ Tres UIs selecionaveis no aparelho (tecla `V`, fica salva): **Terminal** (A),
 | Tocando | `B` / `TAB` / `ENTER` | abre a lista |
 | Qualquer | `DEL` | abre a lista (se fechada) |
 | Qualquer | `V` | cicla a UI: Terminal / Now Playing / Tape Deck |
+| Qualquer | `R` | liga/desliga o **modo Radio** (web radio) |
+| Radio | `,` / `/` | estacao anterior / proxima |
+| Radio | `B` / `TAB` | abre/fecha a lista de estacoes (`ENTER` toca) |
+| Radio | `;` / `.` | volume + / - |
+| Radio | `SPACE` | pausa (desconecta) / continua |
+| Radio | `DEL` / `R` | sai do modo radio |
 
 Toca pastas inteiras em sequencia (ordem natural, 01 < 02 < 10), com auto-next no fim.
-Ultima pasta e volume ficam salvos na NVS.
+Ultima pasta, volume, tema e ultima estacao ficam salvos na NVS.
+
+## Radio (web radio)
+
+- `/sd/wifi.txt`: **linha 1 = SSID, linha 2 = senha** (rede 2.4 GHz).
+- `/sd/radio.txt`: uma estacao por linha — formatos aceitos: `Nome|URL`,
+  `Nome,URL`, URL sozinha, `#EXTINF:-1,Nome` (M3U), linhas `#` = comentario.
+- Ao entrar no radio o WiFi liga (STA); ao sair, o WiFi e desligado para liberar
+  memoria (o app nao tem PSRAM). Streaming MP3/AAC/OGG via http/https.
+- Nome da estacao e musica atual (ICY) aparecem na tela dos 3 temas.
 
 ## Qualidade de audio (bit-perfect ate o DAC)
 
@@ -79,6 +96,13 @@ src/player.*      fila, decode (task dedicada), metadados, volume/seek, NVS
 src/flac_player.* decoder FLAC proprio (dr_flac + arena estatica)
 src/dr_flac.h     dr_flac v0.13.4 vendorizado (single header)
 src/browser.*     navegacao de pastas no SD (ordem natural, UTF-8)
+src/radio.*       web radio: wifi.txt, parser de radio.txt, estado do WiFi
 src/ui.*          UIs Terminal/Now Playing/Tape Deck + lista + OSD (canvas 240x135)
 src/main.cpp      setup/loop, teclado, mount do SD
 ```
+
+## Licenca
+
+GPL-3.0 (ver `LICENSE`). Bibliotecas embutidas com licencas proprias:
+ESP32-audioI2S (GPL-3.0, vendorizada com patches em `lib/`), dr_flac (public
+domain / MIT-0, em `src/dr_flac.h`), M5Unified e M5Cardputer (MIT).

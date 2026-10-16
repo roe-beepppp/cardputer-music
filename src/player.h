@@ -23,6 +23,11 @@ struct PlayerState {
 
 namespace player {
 
+struct RadioStation {
+    String name;
+    String url;
+};
+
 void begin();
 void task(void* arg);
 const PlayerState& state();
@@ -45,5 +50,20 @@ void saveDir(const String& dir);
 
 uint8_t uiTheme();
 void saveUiTheme(uint8_t idx);
+
+void setRadioStations(const std::vector<RadioStation>& v);
+int radioCount();
+const RadioStation* radioStation(int i);
+int radioIndex();
+void radioPlay(int idx);
+void radioNext();
+void radioPrev();
+bool radioMode();
+void enterRadio();
+void exitRadio();
+int radioLastIndex();
+void onStreamTitle(const char* info);
+void onStation(const char* info);
+void onStreamEof();
 
 }

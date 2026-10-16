@@ -18,6 +18,8 @@ timeout 240 python3 /tmp/opencode/sermon.py /dev/ttyACMn 235        # monitor se
 ## Regras do projeto
 
 - NUNCA modificar `/home/roe/Músicas/` (nem copiar pra lá).
+- NUNCA chamar `radio::enter()` sem `ui::setLowMem(true)` antes — o `esp_wifi_init` precisa de heap contíguo; com canvas 16bpp dá `ESP_ERR_NO_MEM`. Ao sair do rádio: `radio::leave()` (WiFi OFF) ANTES de `ui::setLowMem(false)`.
+- custom_sdkconfig (platformio.ini) controla o hash TASMOTA de `sdkconfig.defaults` — mudar = reinstall do framework (~350-500s de build). Se der erro estranho no build do core (ex. IPv6/esp-modbus), `rm sdkconfig.cardputer-adv` e rebuildar. NUNCA commitar `sdkconfig.defaults`/`sdkconfig.cardputer-adv` (raiz).
 - Logs: usar `CM_LOG` de `src/config.h` (nunca `Serial.printf` direto no loop — USB CDC sem leitor bloqueia o loop).
 - ESP32-audioI2S é **vendorizada** em `lib/` com 5 patches (overflow ID3, wrap bytesWasRead, deadlock do AudioBuffer nos skips ID3, guard SBR, guard FLAC — ver MEMORY.md §5). Nunca substituir por versão de registry (≥3.3 exige PSRAM; upstream quebra sem PSRAM).
 - FLAC: tocado por caminho PRÓPRIO (`src/flac_player.*` + dr_flac + arena estática de 40KB) — o guard da lib fica desativado de propósito; não reativar o FLAC da lib (overflow sem PSRAM).
